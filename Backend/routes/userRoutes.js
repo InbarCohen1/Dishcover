@@ -3,14 +3,14 @@ const router = express.Router();
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const { calculateDominantDistrict } = require("../utils/helpers"); // Import the helper function
-const User = require("../models/User");
+const { User, UserProfile } = require("../models/User");
 const Restaurant = require("../models/Restaurant");
 const Reviews = require("../models/Review");
-const JWT_SECRET = process.env.JWT_SECRET; // Ensure JWT_SECRET is managed securely
 require("dotenv").config();
+const JWT_SECRET = process.env.JWT_SECRET; // Ensure JWT_SECRET is managed securely
+const mongoURI = process.env.MONGODB_URI;
 
 const mongoose = require("mongoose");
-const mongoURI = process.env.MONGODB_URI;
 mongoose
   .connect(mongoURI)
   .then(() => console.log("MongoDB connected"))
@@ -144,6 +144,7 @@ router.post("/placesUserVisit", async (req, res) => {
       {
         $group: {
           _id: "$name",
+          mainImage: { $first: "$mainImage" },
           name: { $first: "$name" },
           district: { $first: "$district" },
         },
@@ -224,11 +225,24 @@ router.post("/reviewByUser", async (req, res) => {
     }
     const userId = user._id;
 
-    // Check if the restaurant exists
-    let restaurant = await Reviews.findOne({ name: restaurantName });
-
+    // Find the restaurant's ID
+    const restaurant = await Restaurant.findOne({ name: restaurantName });
     if (!restaurant) {
-      restaurant = new Reviews({ name: restaurantName, reviews: [] });
+      return res.status(404).send({ message: "Restaurant not found" });
+    }
+    const restaurantId = restaurant._id;
+
+    // Check if the restaurant exists in the Reviews collection
+    let restaurantReviews = await Reviews.findOne({
+      restaurantId: restaurantId,
+    });
+
+    if (!restaurantReviews) {
+      restaurantReviews = new Reviews({
+        name: restaurantName,
+        restaurantId: restaurantId,
+        reviews: [],
+      });
     }
 
     const newReview = {
@@ -241,10 +255,10 @@ router.post("/reviewByUser", async (req, res) => {
     };
 
     // Add the new review to the restaurant's reviews array
-    restaurant.reviews.push(newReview);
-    await restaurant.save();
+    restaurantReviews.reviews.push(newReview);
+    await restaurantReviews.save();
 
-    res.status(201).send(restaurant);
+    res.status(201).send(restaurantReviews);
   } catch (error) {
     res.status(500).send({ message: "Internal Server Error" });
   }
@@ -252,7 +266,7 @@ router.post("/reviewByUser", async (req, res) => {
 
 // Delete a restaurant from user's placesToVisit
 router.delete("/deleteRestaurantFromPlacesToVisit", async (req, res) => {
-  const { username, restaurantName, visited } = req.body;
+  const { username, restaurantName } = req.body;
 
   if (!username || !restaurantName) {
     return res.status(400).send({ message: "Missing required fields" });
@@ -270,17 +284,12 @@ router.delete("/deleteRestaurantFromPlacesToVisit", async (req, res) => {
       (restaurant) => restaurant !== restaurantName
     );
 
-    // If the restaurant is visited, add it to the placesVisited list
-    if (visited) {
-      if (!user.placesVisited.includes(restaurantName)) {
-        user.placesVisited.push(restaurantName);
-      }
-    }
-
     // Save the updated user document
     await user.save();
 
-    res.status(200).send({ message: "Restaurant updated successfully" });
+    res.status(200).send({
+      message: "Restaurant updated successfully",
+    });
   } catch (error) {
     res.status(500).send({ message: "Internal Server Error" });
   }
@@ -295,9 +304,6 @@ router.get("/getPlacesUserWantToVisit", async (req, res) => {
     if (!user) {
       return res.status(404).send({ message: "User not found" });
     }
-
-    console.log("user.placesToVisit:", user.placesToVisit);
-
     const restaurants = await Restaurant.aggregate([
       { $match: { name: { $in: user.placesToVisit } } },
       {
@@ -312,9 +318,6 @@ router.get("/getPlacesUserWantToVisit", async (req, res) => {
         },
       },
     ]);
-
-    console.log("Restaurants:", restaurants);
-
     res.status(200).send({ placesToVisit: restaurants });
   } catch (error) {
     res.status(500).send({ message: "Internal Server Error" });
@@ -333,8 +336,6 @@ router.get("/restaurantsRecommendations", async (req, res) => {
     isGlutenFree,
     isWheelchairAccessible,
   } = req.query;
-
-  console.log(req.query);
 
   //TODO: Implement this function
 });
